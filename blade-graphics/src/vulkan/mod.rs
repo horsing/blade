@@ -1,5 +1,6 @@
 use ash::{khr, vk};
 use std::{num::NonZeroU32, ptr, sync::Mutex};
+use ash::vk::{Framebuffer, Rect2D, RenderPass, StructureType};
 
 mod command;
 mod descriptor;
@@ -33,7 +34,7 @@ struct Device {
     device_information: crate::DeviceInformation,
     debug_utils: ash::ext::debug_utils::Device,
     timeline_semaphore: khr::timeline_semaphore::Device,
-    dynamic_rendering: khr::dynamic_rendering::Device,
+    dynamic_rendering: Option<khr::dynamic_rendering::Device>,
     ray_tracing: Option<RayTracingDevice>,
     buffer_marker: Option<ash::amd::buffer_marker::Device>,
     shader_info: Option<ash::amd::shader_info::Device>,
@@ -578,6 +579,45 @@ struct BottomLevelAccelerationStructureInput<'a> {
 }
 
 impl Device {
+    fn rendering_begin(&self, buf: vk::CommandBuffer, ri: &vk::RenderingInfo) {
+        match self.dynamic_rendering.as_ref() {
+            Some(r) => {
+                unsafe {
+                    r.cmd_begin_rendering(buf, ri);
+                }
+            },
+            None => {
+                unsafe {
+                    let mut pass = vk::RenderPassBeginInfo::default();
+                    pass.s_type = ri.s_type;
+                    pass.p_next = ri.p_next;
+                    pass.render_pass = vk::RenderPass::default();
+                    pass.framebuffer = vk::Framebuffer::default();
+                    pass.render_area = ri.render_area;
+                    pass.clear_value_count = 3;
+                    pass.p_clear_values = &vk::ClearValue::default();
+                    let contents = vk::SubpassContents::default();
+                    self.core.cmd_begin_render_pass(buf, &pass, contents);
+                }
+            },
+        }
+    }
+
+    fn rendering_end(&self, buf: vk::CommandBuffer) {
+        match self.dynamic_rendering.as_ref() {
+            Some(r) => {
+                unsafe {
+                    r.cmd_end_rendering(buf);
+                }
+            },
+            None => {
+                unsafe {
+                    self.core.cmd_end_render_pass(buf);
+                }
+            },
+        }
+    }
+
     fn get_device_address(&self, piece: &crate::BufferPiece) -> u64 {
         let vk_info = vk::BufferDeviceAddressInfo {
             buffer: piece.buffer.raw,

@@ -358,6 +358,7 @@ impl super::CommandEncoder {
         }
     }
 
+
     pub fn render(&mut self, targets: crate::RenderTargetSet) -> super::RenderCommandEncoder {
         self.barrier();
         self.mark("pass/render");
@@ -410,9 +411,7 @@ impl super::CommandEncoder {
             self.device
                 .core
                 .cmd_set_scissor(cmd_buf.raw, 0, &[render_area]);
-            self.device
-                .dynamic_rendering
-                .cmd_begin_rendering(cmd_buf.raw, &rendering_info);
+            self.device.rendering_begin(cmd_buf.raw, &rendering_info);
         };
 
         super::RenderCommandEncoder {
@@ -680,11 +679,7 @@ impl<'a> super::RenderCommandEncoder<'a> {
 
 impl Drop for super::RenderCommandEncoder<'_> {
     fn drop(&mut self) {
-        unsafe {
-            self.device
-                .dynamic_rendering
-                .cmd_end_rendering(self.cmd_buf.raw)
-        };
+        self.device.rendering_end(self.cmd_buf.raw);
     }
 }
 

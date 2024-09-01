@@ -21,8 +21,9 @@ const REQUIRED_DEVICE_EXTENSIONS: &[&ffi::CStr] = &[
     vk::EXT_INLINE_UNIFORM_BLOCK_NAME,
     vk::KHR_TIMELINE_SEMAPHORE_NAME,
     vk::KHR_DESCRIPTOR_UPDATE_TEMPLATE_NAME,
-    vk::KHR_DYNAMIC_RENDERING_NAME,
 ];
+
+const OPTIONAL_KHR_DYNAMIC_RENDERING: &ffi::CStr = vk::KHR_DYNAMIC_RENDERING_NAME;
 
 #[derive(Debug)]
 #[allow(unused)]
@@ -41,6 +42,7 @@ struct AdapterCapabilities {
     queue_family_index: u32,
     layered: bool,
     ray_tracing: bool,
+    dynamic_rendering: bool,
     buffer_marker: bool,
     shader_info: bool,
     full_screen_exclusive: bool,
@@ -149,6 +151,8 @@ unsafe fn inspect_adapter(
         }
     }
 
+    let dynamic_rendering = supported_extensions.contains(&OPTIONAL_KHR_DYNAMIC_RENDERING);
+
     let mut inline_uniform_block_features =
         vk::PhysicalDeviceInlineUniformBlockFeaturesEXT::default();
     let mut timeline_semaphore_features = vk::PhysicalDeviceTimelineSemaphoreFeaturesKHR::default();
@@ -163,11 +167,13 @@ unsafe fn inspect_adapter(
     let mut features2_khr = vk::PhysicalDeviceFeatures2::default()
         .push_next(&mut inline_uniform_block_features)
         .push_next(&mut timeline_semaphore_features)
-        .push_next(&mut dynamic_rendering_features)
         .push_next(&mut descriptor_indexing_features)
         .push_next(&mut buffer_device_address_features)
         .push_next(&mut acceleration_structure_features)
         .push_next(&mut ray_query_features);
+    if dynamic_rendering {
+        features2_khr = features2_khr.push_next(&mut dynamic_rendering_features);
+    }
     instance
         .get_physical_device_properties2
         .get_physical_device_features2(phd, &mut features2_khr);
@@ -190,14 +196,6 @@ unsafe fn inspect_adapter(
             "\tRejected for timeline semaphore. Properties = {:?}, Features = {:?}",
             timeline_semaphore_properties,
             timeline_semaphore_features,
-        );
-        return None;
-    }
-
-    if dynamic_rendering_features.dynamic_rendering == 0 {
-        log::warn!(
-            "\tRejected for dynamic rendering. Features = {:?}",
-            dynamic_rendering_features,
         );
         return None;
     }
@@ -266,6 +264,7 @@ unsafe fn inspect_adapter(
         queue_family_index,
         layered: portability_subset_properties.min_vertex_input_binding_stride_alignment != 0,
         ray_tracing,
+        dynamic_rendering,
         buffer_marker,
         shader_info,
         full_screen_exclusive,
@@ -466,6 +465,9 @@ impl super::Context {
             if capabilities.full_screen_exclusive {
                 device_extensions.push(vk::EXT_FULL_SCREEN_EXCLUSIVE_NAME);
             }
+            if capabilities.dynamic_rendering {
+                device_extensions.push(OPTIONAL_KHR_DYNAMIC_RENDERING);
+            }
 
             let str_pointers = device_extensions
                 .iter()
@@ -488,8 +490,11 @@ impl super::Context {
                 .queue_create_infos(&family_infos)
                 .enabled_extension_names(&str_pointers)
                 .push_next(&mut ext_inline_uniform_block)
-                .push_next(&mut khr_timeline_semaphore)
-                .push_next(&mut khr_dynamic_rendering);
+                .push_next(&mut khr_timeline_semaphore);
+
+            if capabilities.dynamic_rendering {
+                device_create_info = device_create_info.push_next(&mut khr_dynamic_rendering);
+            }
 
             let mut ext_descriptor_indexing;
             let mut khr_buffer_device_address;
@@ -530,7 +535,11 @@ impl super::Context {
         let device = super::Device {
             debug_utils: ext::debug_utils::Device::new(&instance.core, &device_core),
             timeline_semaphore: khr::timeline_semaphore::Device::new(&instance.core, &device_core),
-            dynamic_rendering: khr::dynamic_rendering::Device::new(&instance.core, &device_core),
+            dynamic_rendering: if capabilities.dynamic_rendering {
+                Some(khr::dynamic_rendering::Device::new(&instance.core, &device_core)) 
+            } else {
+                None
+            },
             ray_tracing: if capabilities.ray_tracing {
                 Some(super::RayTracingDevice {
                     acceleration_structure: khr::acceleration_structure::Device::new(
